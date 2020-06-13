@@ -90,7 +90,15 @@ function FloppyController(cpu, fda_image, fdb_image)
         }
         else
         {
-            throw "Unknown floppy size: " + h(fda_image.byteLength);
+            console.error("Unknown floppy size: " + h(fda_image.byteLength));
+            floppy_type = floppy_types[1440];
+
+            cpu.devices.rtc.cmos_write(CMOS_FLOPPY_DRIVE_TYPE, floppy_type.type << 4);
+
+            sectors_per_track = floppy_type.sectors;
+            number_of_heads = floppy_type.heads;
+            number_of_cylinders = floppy_type.tracks;
+
         }
 
         this.sectors_per_track = sectors_per_track;
