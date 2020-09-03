@@ -319,6 +319,10 @@
                     "size": 300 * 1024 * 1024,
                 },
                 name: "Windows 98",
+                state: {
+                    "url": HOST + "images/windows98_state.bin",
+                    "size": 75705744,
+                },
             },
             {
                 id: "windows95",

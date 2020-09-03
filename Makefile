@@ -1,6 +1,6 @@
 CLOSURE_DIR=closure-compiler
 CLOSURE=$(CLOSURE_DIR)/compiler.jar
-BROWSER=chromium
+BROWSER=chromium-browser
 NASM_TEST_DIR=./tests/nasm
 
 all: build/v86_all.js
@@ -140,9 +140,9 @@ clean:
 	$(MAKE) -C $(NASM_TEST_DIR) clean
 
 run:
-	python3 -m http.server 2> /dev/null
-	#sleep 1
-	#$(BROWSER) http://localhost:8000/index.html &
+	python3 -m http.server
+	sleep 1
+	$(BROWSER) http://127.0.0.1:8000/index.html &
 
 update_version:
 	set -e ;\
