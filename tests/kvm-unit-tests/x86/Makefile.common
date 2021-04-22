@@ -1,6 +1,6 @@
 #This is a make file with common rules for both x86 & x86-64
 
-all: directories test_cases
+all: test_cases
 
 cflatobjs += lib/pci.o
 cflatobjs += lib/pci-edu.o
@@ -16,14 +16,11 @@ cflatobjs += lib/x86/isr.o
 cflatobjs += lib/x86/acpi.o
 cflatobjs += lib/x86/stack.o
 
-OBJDIRS += lib/x86
-
 $(libcflat): LDFLAGS += -nostdlib
-$(libcflat): CFLAGS += -ffreestanding -I $(SRCDIR)/lib -I lib
+$(libcflat): CFLAGS += -ffreestanding -I lib
 
-COMMON_CFLAGS += -m$(bits)
-COMMON_CFLAGS += -O1
-COMMON_CFLAGS += -fno-stack-protector
+CFLAGS += -m$(bits)
+CFLAGS += -O1
 
 # stack.o relies on frame pointers.
 KEEP_FRAME_POINTER := y
@@ -34,8 +31,8 @@ libgcc := $(shell $(CC) -m$(bits) --print-libgcc-file-name)
 .PRECIOUS: %.elf %.o
 
 FLATLIBS = lib/libcflat.a $(libgcc)
-%.elf: %.o $(FLATLIBS) $(SRCDIR)/x86/flat.lds $(cstart.o)
-	$(CC) $(CFLAGS) -nostdlib -o $@ -Wl,-T,$(SRCDIR)/x86/flat.lds \
+%.elf: %.o $(FLATLIBS) x86/flat.lds $(cstart.o)
+	$(CC) $(CFLAGS) -nostdlib -o $@ -Wl,-T,x86/flat.lds \
 		$(filter %.o, $^) $(FLATLIBS)
 
 %.flat: %.elf
@@ -50,20 +47,19 @@ tests-common = $(TEST_DIR)/vmexit.flat $(TEST_DIR)/tsc.flat \
                $(TEST_DIR)/tsc_adjust.flat $(TEST_DIR)/asyncpf.flat \
                $(TEST_DIR)/init.flat $(TEST_DIR)/smap.flat \
                $(TEST_DIR)/hyperv_synic.flat $(TEST_DIR)/hyperv_stimer.flat \
-               $(TEST_DIR)/hyperv_connections.flat \
 
 ifdef API
-tests-api = api/api-sample api/dirty-log api/dirty-log-perf
-
-OBJDIRS += api
+tests-common += api/api-sample
+tests-common += api/dirty-log
+tests-common += api/dirty-log-perf
 endif
 
-test_cases: $(tests-common) $(tests) $(tests-api)
+test_cases: $(tests-common) $(tests)
 
-$(TEST_DIR)/%.o: CFLAGS += -std=gnu99 -ffreestanding -I $(SRCDIR)/lib -I $(SRCDIR)/lib/x86 -I lib
+$(TEST_DIR)/%.o: CFLAGS += -std=gnu99 -ffreestanding -I lib -I lib/x86
 
 $(TEST_DIR)/realmode.elf: $(TEST_DIR)/realmode.o
-	$(CC) -m32 -nostdlib -o $@ -Wl,-T,$(SRCDIR)/$(TEST_DIR)/realmode.lds $^
+	$(CC) -m32 -nostdlib -o $@ -Wl,-T,$(TEST_DIR)/realmode.lds $^
 
 $(TEST_DIR)/realmode.o: bits = 32
 
@@ -73,19 +69,20 @@ $(TEST_DIR)/hyperv_synic.elf: $(TEST_DIR)/hyperv.o
 
 $(TEST_DIR)/hyperv_stimer.elf: $(TEST_DIR)/hyperv.o
 
-$(TEST_DIR)/hyperv_connections.elf: $(TEST_DIR)/hyperv.o
-
 arch_clean:
 	$(RM) $(TEST_DIR)/*.o $(TEST_DIR)/*.flat $(TEST_DIR)/*.elf \
-	$(TEST_DIR)/.*.d lib/x86/.*.d \
-	$(tests-api) api/*.o api/*.a api/.*.d
+	$(TEST_DIR)/.*.d lib/x86/.*.d
 
-api/%.o: CXXFLAGS += -m32 -std=gnu++11
+api/%.o: CFLAGS += -m32
 
-api/%: LDLIBS += -lstdc++ -lpthread -lrt
+api/%: LDLIBS += -lstdc++ -lboost_thread -lpthread -lrt
 api/%: LDFLAGS += -m32
 
 api/libapi.a: api/kvmxx.o api/identity.o api/exception.o api/memmap.o
 	$(AR) rcs $@ $^
 
-$(tests-api) : % : %.o api/libapi.a
+api/api-sample: api/api-sample.o api/libapi.a
+
+api/dirty-log: api/dirty-log.o api/libapi.a
+
+api/dirty-log-perf: api/dirty-log-perf.o api/libapi.a

@@ -86,6 +86,28 @@ CPU.prototype.debug_init = function()
     debug.step = step;
     debug.run_until = run_until;
 
+    /**
+     * @param {string=} msg
+     */
+    debug.unimpl = function(msg)
+    {
+        var s = "Unimplemented" + (msg ? ": " + msg : "");
+
+        debug.show(s);
+
+        if(DEBUG)
+        {
+            console.trace();
+            return s;
+        }
+        else
+        {
+            debug.show("Execution stopped");
+            return s;
+        }
+        //this.name = "Unimplemented";
+    };
+
     function step()
     {
         if(!DEBUG) return;
@@ -108,11 +130,11 @@ CPU.prototype.debug_init = function()
 
         cpu.running = false;
         var a = parseInt(prompt("input hex", ""), 16);
-        if(a) while(cpu.instruction_pointer[0] != a) step();
+        if(a) while(cpu.instruction_pointer != a) step();
     }
 
     // http://ref.x86asm.net/x86reference.xml
-    // for debugging purposes
+    // for debuggin" purposes
     var opcode_map = [
         "ADD", "ADD", "ADD", "ADD", "ADD", "ADD", "PUSH", "POP",
         "OR", "OR", "OR", "OR", "OR", "OR", "PUSH", "0F:",
@@ -155,8 +177,6 @@ CPU.prototype.debug_init = function()
             return;
         }
 
-        _ip = _ip >>> 0;
-
         if(debug.trace_all && debug.all_ops)
         {
             debug.all_ops.push(_ip, op);
@@ -172,7 +192,7 @@ CPU.prototype.debug_init = function()
     {
         if(!DEBUG) return;
 
-        var esp = cpu.reg32[REG_ESP];
+        var esp = cpu.reg32[reg_esp];
         dbg_log("========= STACK ==========");
 
         if(end >= start || end === undefined)
@@ -195,28 +215,26 @@ CPU.prototype.debug_init = function()
 
     function get_state(where)
     {
-        if(!DEBUG) return;
-
-        var mode = cpu.protected_mode[0] ? "prot" : "real";
-        var vm = (cpu.flags[0] & FLAG_VM) ? 1 : 0;
+        var vm = (cpu.flags & flag_vm) ? 1 : 0;
+        var mode = cpu.protected_mode ? vm ? "vm86" : "prot" : "real";
         var flags = cpu.get_eflags();
         var iopl = cpu.getiopl();
-        var cpl = cpu.cpl[0];
-        var cs_eip = h(cpu.sreg[REG_CS], 4) + ":" + h(cpu.get_real_eip() >>> 0, 8);
-        var ss_esp = h(cpu.sreg[REG_SS], 4) + ":" + h(cpu.reg32[REG_ES] >>> 0, 8);
-        var op_size = cpu.is_32[0] ? "32" : "16";
-        var if_ = (cpu.flags[0] & FLAG_INTERRUPT) ? 1 : 0;
+        var cpl = cpu.cpl;
+        var cs_eip = h(cpu.sreg[reg_cs], 4) + ":" + h(cpu.get_real_eip() >>> 0, 8);
+        var ss_esp = h(cpu.sreg[reg_ss], 4) + ":" + h(cpu.get_stack_reg() >>> 0, 8);
+        var op_size = cpu.is_32 ? "32" : "16";
+        var if_ = (cpu.flags & flag_interrupt) ? 1 : 0;
 
         var flag_names = {
-            [FLAG_CARRY]: "c",
-            [FLAG_PARITY]: "p",
-            [FLAG_ADJUST]: "a",
-            [FLAG_ZERO]: "z",
-            [FLAG_SIGN]: "s",
-            [FLAG_TRAP]: "t",
-            [FLAG_INTERRUPT]: "i",
-            [FLAG_DIRECTION]: "d",
-            [FLAG_OVERFLOW]: "o",
+            [flag_carry]: "c",
+            [flag_parity]: "p",
+            [flag_adjust]: "a",
+            [flag_zero]: "z",
+            [flag_sign]: "s",
+            [flag_trap]: "t",
+            [flag_interrupt]: "i",
+            [flag_direction]: "d",
+            [flag_overflow]: "o",
         };
         var flag_string = "";
 
@@ -235,12 +253,12 @@ CPU.prototype.debug_init = function()
             }
         }
 
-        return ("mode=" + mode + "/" + op_size + " paging=" + (+((cpu.cr[0] & CR0_PG) !== 0)) +
+        return ("mode=" + mode + "/" + op_size + " paging=" + (+cpu.paging) +
                 " iopl=" + iopl + " cpl=" + cpl + " if=" + if_ + " cs:eip=" + cs_eip +
-                " cs_off=" + h(cpu.get_seg_cs() >>> 0, 8) +
+                " cs_off=" + h(cpu.get_seg(reg_cs) >>> 0, 8) +
                 " flgs=" + h(cpu.get_eflags() >>> 0, 6) + " (" + flag_string + ")" +
                 " ss:esp=" + ss_esp +
-                " ssize=" + (+cpu.stack_size_32[0]) +
+                " ssize=" + (+cpu.stack_size_32) +
                 (where ? " in " + where : ""));
     }
 
@@ -254,10 +272,10 @@ CPU.prototype.debug_init = function()
     function get_regs_short()
     {
         var
-            r32 = { "eax": REG_EAX, "ecx": REG_ECX, "edx": REG_EDX, "ebx": REG_EBX,
-                    "esp": REG_ESP, "ebp": REG_EBP, "esi": REG_ESI, "edi": REG_EDI },
+            r32 = { "eax": reg_eax, "ecx": reg_ecx, "edx": reg_edx, "ebx": reg_ebx,
+                    "esp": reg_esp, "ebp": reg_ebp, "esi": reg_esi, "edi": reg_edi },
             r32_names = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"],
-            s = { "cs": REG_CS, "ds": REG_DS, "es": REG_ES, "fs": REG_FS, "gs": REG_GS, "ss": REG_SS },
+            s = { "cs": reg_cs, "ds": reg_ds, "es": reg_es, "fs": reg_fs, "gs": reg_gs, "ss": reg_ss },
             line1 = "",
             line2 = "";
 
@@ -265,15 +283,15 @@ CPU.prototype.debug_init = function()
 
         for(var i = 0; i < 4; i++)
         {
-            line1 += r32_names[i] + "="  + h(cpu.reg32[r32[r32_names[i]]] >>> 0, 8) + " ";
-            line2 += r32_names[i+4] + "="  + h(cpu.reg32[r32[r32_names[i+4]]] >>> 0, 8) + " ";
+            line1 += r32_names[i] + "="  + h(cpu.reg32[r32[r32_names[i]]], 8) + " ";
+            line2 += r32_names[i+4] + "="  + h(cpu.reg32[r32[r32_names[i+4]]], 8) + " ";
         }
 
         //line1 += " eip=" + h(cpu.get_real_eip() >>> 0, 8);
         //line2 += " flg=" + h(cpu.get_eflags(), 8);
 
-        line1 += "  ds=" + h(cpu.sreg[REG_DS], 4) + " es=" + h(cpu.sreg[REG_ES], 4) + " fs=" + h(cpu.sreg[REG_FS], 4);
-        line2 += "  gs=" + h(cpu.sreg[REG_GS], 4) + " cs=" + h(cpu.sreg[REG_CS], 4) + " ss=" + h(cpu.sreg[REG_SS], 4);
+        line1 += "  ds=" + h(cpu.sreg[reg_ds], 4) + " es=" + h(cpu.sreg[reg_es], 4) + " fs=" + h(cpu.sreg[reg_fs], 4);
+        line2 += "  gs=" + h(cpu.sreg[reg_gs], 4) + " cs=" + h(cpu.sreg[reg_cs], 4) + " ss=" + h(cpu.sreg[reg_ss], 4);
 
         return [line1, line2];
     }
@@ -339,11 +357,11 @@ CPU.prototype.debug_init = function()
     {
         if(!DEBUG) return;
 
-        dbg_log("gdt: (len = " + h(cpu.gdtr_size[0]) + ")");
-        dump_table(cpu.translate_address_system_read(cpu.gdtr_offset[0]), cpu.gdtr_size[0]);
+        dbg_log("gdt: (len = " + h(cpu.gdtr_size) + ")");
+        dump_table(cpu.translate_address_system_read(cpu.gdtr_offset), cpu.gdtr_size);
 
-        dbg_log("\nldt: (len = " + h(cpu.segment_limits[REG_LDTR]) + ")");
-        dump_table(cpu.translate_address_system_read(cpu.segment_offsets[REG_LDTR]), cpu.segment_limits[REG_LDTR]);
+        dbg_log("\nldt: (len = " + h(cpu.segment_limits[reg_ldtr]) + ")");
+        dump_table(cpu.translate_address_system_read(cpu.segment_offsets[reg_ldtr]), cpu.segment_limits[reg_ldtr]);
 
         function dump_table(addr, size)
         {
@@ -421,9 +439,9 @@ CPU.prototype.debug_init = function()
     {
         if(!DEBUG) return;
 
-        for(var i = 0; i < cpu.idtr_size[0]; i += 8)
+        for(var i = 0; i < cpu.idtr_size; i += 8)
         {
-            var addr = cpu.translate_address_system_read(cpu.idtr_offset[0] + i),
+            var addr = cpu.translate_address_system_read(cpu.idtr_offset + i),
                 base = cpu.read16(addr) | cpu.read16(addr + 6) << 16,
                 selector = cpu.read16(addr + 2),
                 type = cpu.read8(addr + 5),
@@ -511,7 +529,6 @@ CPU.prototype.debug_init = function()
 
             if(!entry)
             {
-                dbg_log("Not present: " + h((i << 22) >>> 0, 8));
                 continue;
             }
 
@@ -566,7 +583,7 @@ CPU.prototype.debug_init = function()
         if(start === undefined)
         {
             start = 0;
-            count = cpu.memory_size[0];
+            count = cpu.memory_size;
         }
         else if(count === undefined)
         {
@@ -613,7 +630,7 @@ CPU.prototype.debug_init = function()
 
         var width = 0x80,
             height = 0x10,
-            block_size = cpu.memory_size[0] / width / height | 0,
+            block_size = cpu.memory_size / width / height | 0,
             row;
 
         for(var i = 0; i < height; i++)
@@ -689,114 +706,5 @@ CPU.prototype.debug_init = function()
         //    dbg_log("kolibri syscall");
         //    this.debug.dump_regs_short();
         //}
-    };
-
-    let cs;
-    let capstone_decoder;
-
-    debug.dump_code = function(is_32, buffer, start)
-    {
-        if(!capstone_decoder)
-        {
-            if(cs === undefined)
-            {
-                if(typeof require === "function")
-                {
-                    cs = require("./capstone-x86.min.js");
-                }
-                else
-                {
-                    cs = window.cs;
-                }
-
-                if(cs === undefined)
-                {
-                    dbg_log("Warning: Missing capstone library, disassembly not available");
-                    return;
-                }
-            }
-
-            capstone_decoder = [
-                new cs.Capstone(cs.ARCH_X86, cs.MODE_16),
-                new cs.Capstone(cs.ARCH_X86, cs.MODE_32),
-            ];
-        }
-
-        try
-        {
-            const instructions = capstone_decoder[is_32].disasm(buffer, start);
-
-            instructions.forEach(function (instr) {
-                dbg_log(h(instr.address >>> 0) + ": " +
-                    v86util.pads(instr.bytes.map(x => h(x, 2).slice(-2)).join(" "), 20) + " " +
-                    instr.mnemonic + " " + instr.op_str);
-            });
-            dbg_log("");
-        }
-        catch(e)
-        {
-            dbg_log("Could not disassemble: " + Array.from(buffer).map(x => h(x, 2)).join(" "));
-        }
-    };
-
-    function dump_file(ab, name)
-    {
-        var blob = new Blob([ab]);
-
-        var a = document.createElement("a");
-        a["download"] = name;
-        a.href = window.URL.createObjectURL(blob);
-        a.dataset["downloadurl"] = ["application/octet-stream", a["download"], a.href].join(":");
-
-        a.click();
-        window.URL.revokeObjectURL(a.src);
-    }
-
-    let wabt;
-
-    debug.dump_wasm = function(buffer)
-    {
-        if(wabt === undefined)
-        {
-            if(typeof require === "function")
-            {
-                wabt = require("./libwabt.js");
-            }
-            else
-            {
-                wabt = new window.WabtModule;
-            }
-
-            if(wabt === undefined)
-            {
-                dbg_log("Warning: Missing libwabt, wasm dump not available");
-                return;
-            }
-        }
-
-        // Need to make a small copy otherwise libwabt goes nuts trying to copy
-        // the whole underlying buffer
-        buffer = buffer.slice();
-
-        try
-        {
-            var module = wabt.readWasm(buffer, { readDebugNames: false });
-            module.generateNames();
-            module.applyNames();
-            const result = module.toText({ foldExprs: true, inlineExport: true });
-            dbg_log(result);
-        }
-        catch(e)
-        {
-            dump_file(buffer, "failed.wasm");
-            console.log(e.toString());
-        }
-        finally
-        {
-            if(module)
-            {
-                module.destroy();
-            }
-        }
     };
 };

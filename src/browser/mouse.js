@@ -34,10 +34,6 @@ function MouseAdapter(bus, screen_container)
 
     this.destroy = function()
     {
-        if(typeof window === "undefined")
-        {
-            return;
-        }
         window.removeEventListener("touchstart", touch_start_handler, false);
         window.removeEventListener("touchend", touch_end_handler, false);
         window.removeEventListener("touchmove", mousemove_handler, false);
@@ -45,7 +41,7 @@ function MouseAdapter(bus, screen_container)
         window.removeEventListener("mousedown", mousedown_handler, false);
         window.removeEventListener("mouseup", mouseup_handler, false);
         window.removeEventListener("DOMMouseScroll", mousewheel_handler, false);
-        window.removeEventListener("mousewheel", mousewheel_handler, { passive: false });
+        window.removeEventListener("mousewheel", mousewheel_handler, false);
     };
 
     this.init = function()
@@ -63,7 +59,7 @@ function MouseAdapter(bus, screen_container)
         window.addEventListener("mousedown", mousedown_handler, false);
         window.addEventListener("mouseup", mouseup_handler, false);
         window.addEventListener("DOMMouseScroll", mousewheel_handler, false);
-        window.addEventListener("mousewheel", mousewheel_handler, { passive: false });
+        window.addEventListener("mousewheel", mousewheel_handler, false);
     };
     this.init();
 
@@ -88,27 +84,18 @@ function MouseAdapter(bus, screen_container)
             return false;
         }
 
-        const MOVE_MOUSE_WHEN_OVER_SCREEN_ONLY = true;
+        if(e.type === "mousemove" || e.type === "touchmove")
+        {
+            return true;
+        }
 
-        if(MOVE_MOUSE_WHEN_OVER_SCREEN_ONLY)
+        if(e.type === "mousewheel" || e.type === "DOMMouseScroll")
         {
             var parent = screen_container || document.body;
-            return document.pointerLockElement || is_child(e.target, parent);
+            return is_child(e.target, parent);
         }
-        else
-        {
-            if(e.type === "mousemove" || e.type === "touchmove")
-            {
-                return true;
-            }
 
-            if(e.type === "mousewheel" || e.type === "DOMMouseScroll")
-            {
-                return is_child(e.target, parent);
-            }
-
-            return !e.target || e.target.nodeName !== "INPUT" && e.target.nodeName !== "TEXTAREA";
-        }
+        return !e.target || e.target.nodeName !== "INPUT" && e.target.nodeName !== "TEXTAREA";
     }
 
     function touch_start_handler(e)
@@ -209,13 +196,10 @@ function MouseAdapter(bus, screen_container)
 
         mouse.bus.send("mouse-delta", [delta_x, delta_y]);
 
-        if(screen_container)
-        {
-            let absolute_x = e.pageX - screen_container.offsetLeft;
-            let absolute_y = e.pageY - screen_container.offsetTop;
-            mouse.bus.send("mouse-absolute", [
-                absolute_x, absolute_y, screen_container.offsetWidth, screen_container.offsetHeight]);
-        }
+        let absolute_x = e.pageX - screen_container.offsetLeft;
+        let absolute_y = e.pageY - screen_container.offsetTop;
+        mouse.bus.send("mouse-absolute", [
+            absolute_x, absolute_y, screen_container.offsetWidth, screen_container.offsetHeight]);
     }
 
     function mousedown_handler(e)
@@ -255,7 +239,7 @@ function MouseAdapter(bus, screen_container)
         }
         else
         {
-            dbg_log("Unknown event.which: " + e.which);
+            console.log("Unknown event.which: " + e.which);
         }
         mouse.bus.send("mouse-click", [left_down, middle_down, right_down]);
     }

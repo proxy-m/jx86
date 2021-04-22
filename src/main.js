@@ -1,10 +1,7 @@
 "use strict";
 
-/**
- * @constructor
- * @param {Object=} wasm
- */
-function v86(bus, wasm)
+/** @constructor */
+function v86(bus)
 {
     /** @type {boolean} */
     this.running = false;
@@ -13,7 +10,7 @@ function v86(bus, wasm)
     this.stopped = false;
 
     /** @type {CPU} */
-    this.cpu = new CPU(bus, wasm);
+    this.cpu = new CPU(bus);
 
     this.bus = bus;
     bus.register("cpu-init", this.init, this);
@@ -26,8 +23,6 @@ function v86(bus, wasm)
 
 v86.prototype.run = function()
 {
-    this.stopped = false;
-
     if(!this.running)
     {
         this.bus.send("emulator-started");
@@ -65,14 +60,9 @@ v86.prototype.stop = function()
     }
 };
 
-v86.prototype.destroy = function()
-{
-    this.unregister_tick();
-};
-
 v86.prototype.restart = function()
 {
-    this.cpu.reset_cpu();
+    this.cpu.reset();
     this.cpu.load_bios();
 };
 
@@ -92,9 +82,6 @@ if(typeof setImmediate !== "undefined")
 
     /** @this {v86} */
     var register_tick = function() {};
-
-    /** @this {v86} */
-    var unregister_tick = function() {};
 }
 else if(typeof window !== "undefined" && typeof postMessage !== "undefined")
 {
@@ -111,27 +98,16 @@ else if(typeof window !== "undefined" && typeof postMessage !== "undefined")
         window.postMessage(MAGIC_POST_MESSAGE, "*");
     };
 
-    let tick;
-
     /** @this {v86} */
     register_tick = function()
     {
-        tick = e =>
+        window.addEventListener("message", (e) =>
         {
             if(e.source === window && e.data === MAGIC_POST_MESSAGE)
             {
                 this.do_tick();
             }
-        };
-
-        window.addEventListener("message", tick, false);
-    };
-
-    /** @this {v86} */
-    unregister_tick = function()
-    {
-        window.removeEventListener("message", tick);
-        tick = null;
+        }, false);
     };
 }
 else
@@ -144,14 +120,10 @@ else
 
     /** @this {v86} */
     register_tick = function() {};
-
-    /** @this {v86} */
-    unregister_tick = function() {};
 }
 
 v86.prototype.fast_next_tick = fast_next_tick;
 v86.prototype.register_tick = register_tick;
-v86.prototype.unregister_tick = unregister_tick;
 
 if(typeof document !== "undefined" && typeof document.hidden === "boolean")
 {
@@ -198,21 +170,19 @@ v86.prototype.restore_state = function(state)
 
 if(typeof performance === "object" && performance.now)
 {
-    v86.microtick = performance.now.bind(performance);
-}
-else if(typeof require === "function")
-{
-    const { performance } = require("perf_hooks");
-    v86.microtick = performance.now.bind(performance);
-}
-else if(typeof process === "object" && process.hrtime)
-{
     v86.microtick = function()
     {
-        var t = process.hrtime();
-        return t[0] * 1000 + t[1] / 1e6;
+        return performance.now();
     };
 }
+//else if(typeof process === "object" && process.hrtime)
+//{
+//    v86.microtick = function()
+//    {
+//        var t = process.hrtime();
+//        return t[0] * 1000 + t[1] / 1e6;
+//    };
+//}
 else
 {
     v86.microtick = Date.now;

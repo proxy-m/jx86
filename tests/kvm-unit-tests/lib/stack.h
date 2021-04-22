@@ -1,9 +1,3 @@
-/*
- * Header for stack related functions
- *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Library General Public License version 2.
- */
 #ifndef _STACK_H_
 #define _STACK_H_
 

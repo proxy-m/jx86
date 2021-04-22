@@ -8,8 +8,6 @@
 window.onload = function()
 {
     var emulator = new V86Starter({
-        wasm_path: "../build/v86.wasm",
-
         // Uncomment to see what's going on
         //screen_container: document.getElementById("screen_container"),
 
@@ -20,7 +18,7 @@ window.onload = function()
             url: "../bios/vgabios.bin",
         },
         cdrom: {
-            url: "../images/linux4.iso",
+            url: "../images/linux.iso",
         },
         autostart: true,
         disable_keyboard: true,
@@ -33,11 +31,15 @@ window.onload = function()
 
     var stages = [
         {
-            test: "~% ",
+            test: "login:",
+            send: "root\n",
+        },
+        {
+            test: "/root% ",
             send: "ls -1 --color=never /\n",
         },
         {
-            test: "~% ",
+            test: "/root% ",
             send: "lua -e 'print(3+4)'\n",
         },
     ];

@@ -1,7 +1,15 @@
 "use strict";
 
+if(typeof window !== "undefined" && !window.requestAnimationFrame)
+{
+    window.requestAnimationFrame =
+        window.mozRequestAnimationFrame ||
+        window.webkitRequestAnimationFrame;
+}
+
+
 /**
- * Adapter to use visual screen in browsers (in contrast to node)
+ * Adapter to use visual screen in browsers (in constrast to node)
  * @constructor
  *
  * @param {BusConnector} bus
@@ -12,7 +20,7 @@ function ScreenAdapter(screen_container, bus)
 
     var
         graphic_screen = screen_container.getElementsByTagName("canvas")[0],
-        graphic_context = graphic_screen.getContext("2d", { alpha: false }),
+        graphic_context = graphic_screen.getContext("2d"),
 
         text_screen = screen_container.getElementsByTagName("div")[0],
         cursor_element = document.createElement("div");
@@ -33,8 +41,6 @@ function ScreenAdapter(screen_container, bus)
 
         /** @type {number} */
         scale_y = 1,
-
-        base_scale = 1,
 
         graphical_mode_width,
         graphical_mode_height,
@@ -58,8 +64,6 @@ function ScreenAdapter(screen_container, bus)
         // number of rows
         text_mode_height;
 
-    var stopped = false;
-
     var screen = this;
 
     // 0x12345 -> "#012345"
@@ -72,7 +76,7 @@ function ScreenAdapter(screen_container, bus)
 
 
     /**
-     * Charmaps that constraint unicode sequences for the default dospage
+     * Charmaps that containt unicode sequences for the default dospage
      * @const
      */
     var charmap_high = new Uint16Array([
@@ -142,7 +146,10 @@ function ScreenAdapter(screen_container, bus)
 
     bus.register("screen-fill-buffer-end", function(data)
     {
-        this.update_buffer(data);
+        var min = data[0];
+        var max = data[1];
+
+        this.update_buffer(min, max);
     }, this);
 
     bus.register("screen-put-char", function(data)
@@ -160,18 +167,13 @@ function ScreenAdapter(screen_container, bus)
         this.update_cursor_scanline(data[0], data[1]);
     }, this);
 
-    bus.register("screen-clear", function()
-    {
-        this.clear_screen();
-    }, this);
-
     bus.register("screen-set-size-text", function(data)
     {
         this.set_size_text(data[0], data[1]);
     }, this);
     bus.register("screen-set-size-graphical", function(data)
     {
-        this.set_size_graphical(data[0], data[1], data[2], data[3]);
+        this.set_size_graphical(data[0], data[1]);
     }, this);
 
 
@@ -187,10 +189,7 @@ function ScreenAdapter(screen_container, bus)
     this.make_screenshot = function()
     {
         try {
-            const image = new Image();
-            image.src = graphic_screen.toDataURL("image/png");
-            const w = window.open("");
-            w.document.write(image.outerHTML);
+            window.open(graphic_screen.toDataURL());
         }
         catch(e) {}
     };
@@ -211,10 +210,7 @@ function ScreenAdapter(screen_container, bus)
 
     this.timer = function()
     {
-        if(!stopped)
-        {
-            requestAnimationFrame(is_graphical ? update_graphical : update_text);
-        }
+        requestAnimationFrame(is_graphical ? update_graphical : update_text);
     };
 
     var update_text = function()
@@ -239,7 +235,6 @@ function ScreenAdapter(screen_container, bus)
 
     this.destroy = function()
     {
-        stopped = true;
     };
 
     this.set_mode = function(graphical)
@@ -299,17 +294,8 @@ function ScreenAdapter(screen_container, bus)
         update_scale_text();
     };
 
-    this.set_size_graphical = function(width, height, buffer_width, buffer_height)
+    this.set_size_graphical = function(width, height)
     {
-        if(DEBUG_SCREEN_LAYERS)
-        {
-            // Draw the entire buffer. Useful for debugging
-            // panning / page flipping / screen splitting code for both
-            // v86 developers and os developers
-            width = buffer_width;
-            height = buffer_height;
-        }
-
         graphic_screen.style.display = "block";
 
         graphic_screen.width = width;
@@ -321,22 +307,12 @@ function ScreenAdapter(screen_container, bus)
         // Make sure to call this here, because pixels are transparent otherwise
         //screen.clear_screen();
 
-        graphic_image_data = graphic_context.createImageData(buffer_width, buffer_height);
+        graphic_image_data = graphic_context.createImageData(width, height);
         graphic_buffer = new Uint8Array(graphic_image_data.data.buffer);
         graphic_buffer32 = new Int32Array(graphic_image_data.data.buffer);
 
         graphical_mode_width = width;
         graphical_mode_height = height;
-
-        // add some scaling to tiny resolutions
-        if(graphical_mode_width <= 640)
-        {
-            base_scale = 2;
-        }
-        else
-        {
-            base_scale = 1;
-        }
 
         this.bus.send("screen-tell-buffer", [graphic_buffer32], [graphic_buffer32.buffer]);
         update_scale_graphic();
@@ -359,7 +335,7 @@ function ScreenAdapter(screen_container, bus)
 
     function update_scale_graphic()
     {
-        elem_set_scale(graphic_screen, scale_x * base_scale, scale_y * base_scale, false);
+        elem_set_scale(graphic_screen, scale_x, scale_y, false);
     }
 
     function elem_set_scale(elem, scale_x, scale_y, use_scale)
@@ -369,7 +345,7 @@ function ScreenAdapter(screen_container, bus)
 
         if(use_scale)
         {
-            elem.style.transform = "";
+            elem.style.transform = elem.style.webkitTransform = elem.style.MozTransform = "";
         }
 
         var rectangle = elem.getBoundingClientRect();
@@ -381,15 +357,18 @@ function ScreenAdapter(screen_container, bus)
             scale_str += scale_x === 1 ? "" : " scaleX(" + scale_x + ")";
             scale_str += scale_y === 1 ? "" : " scaleY(" + scale_y + ")";
 
-            elem.style.transform = scale_str;
+            elem.style.transform = elem.style.webkitTransform = elem.style.MozTransform = scale_str;
         }
         else
         {
             // unblur non-fractional scales
             if(scale_x % 1 === 0 && scale_y % 1 === 0)
             {
-                graphic_screen.style["imageRendering"] = "crisp-edges"; // firefox
-                graphic_screen.style["imageRendering"] = "pixelated";
+                graphic_screen.style.imageRendering = "-moz-crisp-edges";
+                graphic_screen.style.imageRendering = "moz-crisp-edges";
+                graphic_screen.style.imageRendering = "webkit-optimize-contrast";
+                graphic_screen.style.imageRendering = "o-crisp-edges";
+                graphic_screen.style.imageRendering = "pixelated";
                 graphic_screen.style["-ms-interpolation-mode"] = "nearest-neighbor";
             }
             else
@@ -506,48 +485,25 @@ function ScreenAdapter(screen_container, bus)
         row_element.parentNode.replaceChild(fragment, row_element);
     };
 
-    this.update_buffer = function(layers)
+    this.update_buffer = function(min, max)
     {
-        if(DEBUG_SCREEN_LAYERS)
+        if(max < min)
         {
-            // Draw the entire buffer. Useful for debugging
-            // panning / page flipping / screen splitting code for both
-            // v86 developers and os developers
-            graphic_context.putImageData(
-                graphic_image_data,
-                0, 0
-            );
-
-            // For each visible layer that would've been drawn, draw a
-            // rectangle to visualise the layer instead.
-            graphic_context.strokeStyle = "#0F0";
-            graphic_context.lineWidth = 4;
-            layers.forEach((layer) =>
-            {
-                graphic_context.strokeRect(
-                    layer.buffer_x,
-                    layer.buffer_y,
-                    layer.buffer_width,
-                    layer.buffer_height
-                );
-            });
-            graphic_context.lineWidth = 1;
             return;
         }
 
-        layers.forEach((layer) =>
-        {
-            graphic_context.putImageData(
-                graphic_image_data,
-                layer.screen_x - layer.buffer_x,
-                layer.screen_y - layer.buffer_y,
-                layer.buffer_x,
-                layer.buffer_y,
-                layer.buffer_width,
-                layer.buffer_height
-            );
-        });
+        var min_y = min / graphical_mode_width | 0;
+        var max_y = max / graphical_mode_width | 0;
+
+        graphic_context.putImageData(
+            graphic_image_data,
+            0, 0,
+            0, min_y,
+            graphical_mode_width, max_y - min_y + 1
+        );
     };
 
     this.init();
 }
+
+

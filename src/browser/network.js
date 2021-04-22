@@ -13,6 +13,8 @@
  */
 function NetworkAdapter(url, bus)
 {
+    this.send_data = function(x) {};
+
     this.bus = bus;
     this.socket = undefined;
 
@@ -73,11 +75,6 @@ NetworkAdapter.prototype.destroy = function()
 
 NetworkAdapter.prototype.connect = function()
 {
-    if(typeof WebSocket === "undefined")
-    {
-        return;
-    }
-
     if(this.socket)
     {
         var state = this.socket.readyState;
@@ -98,10 +95,19 @@ NetworkAdapter.prototype.connect = function()
 
     this.last_connect_attempt = Date.now();
 
-    this.socket = new WebSocket(this.url);
+    try
+    {
+        this.socket = new WebSocket(this.url);
+    }
+    catch(e)
+    {
+        this.handle_close(undefined);
+        return;
+    }
+
     this.socket.binaryType = "arraybuffer";
 
-    this.socket.onopen = this.handle_open.bind(this);
+    this.socket.onopen = this.handle_open.bind(this);;
     this.socket.onmessage = this.handle_message.bind(this);
     this.socket.onclose = this.handle_close.bind(this);
     this.socket.onerror = this.handle_error.bind(this);
@@ -126,17 +132,4 @@ NetworkAdapter.prototype.send = function(data)
     {
         this.socket.send(data);
     }
-};
-
-NetworkAdapter.prototype.change_proxy = function(url)
-{
-    this.url = url;
-
-    if(this.socket)
-    {
-        this.socket.onclose = function() {};
-        this.socket.onerror = function() {};
-        this.socket.close();
-        this.socket = undefined;
-    }
-};
+}

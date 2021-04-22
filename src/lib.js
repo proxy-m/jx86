@@ -1,60 +1,31 @@
 "use strict";
 
-var goog = goog || {};
-goog.exportSymbol = function() {};
-goog.exportProperty = function() {};
-
 var v86util = v86util || {};
 
 // pad string with spaces on the right
 v86util.pads = function(str, len)
 {
-    str = (str || str === 0) ? str + "" : "";
-    return str.padEnd(len, " ");
+    str = str ? str + "" : "";
+
+    while(str.length < len)
+    {
+        str = str + " ";
+    }
+
+    return str;
 };
 
 // pad string with zeros on the left
 v86util.pad0 = function(str, len)
 {
-    str = (str || str === 0) ? str + "" : "";
-    return str.padStart(len, "0");
-};
+    str = str ? str + "" : "";
 
-// generates array given size with zeros
-v86util.zeros = function(size)
-{
-    return Array(size).fill(0);
-};
+    while(str.length < len)
+    {
+        str = "0" + str;
+    }
 
-// generates [0, 1, 2, ..., size-1]
-v86util.range = function(size)
-{
-    return Array.from(Array(size).keys());
-};
-
-v86util.view = function(constructor, memory, offset, length)
-{
-    return new Proxy({},
-        {
-            get: function(target, property, receiver)
-            {
-                const b = new constructor(memory.buffer, offset, length);
-                const x = b[property];
-                if(typeof x === "function")
-                {
-                    return x.bind(b);
-                }
-                dbg_assert(/^\d+$/.test(property) || property === "buffer" || property === "length" ||
-                    property === "BYTES_PER_ELEMENT" || property === "byteOffset");
-                return x;
-            },
-            set: function(target, property, value, receiver)
-            {
-                dbg_assert(/^\d+$/.test(property));
-                new constructor(memory.buffer, offset, length)[property] = value;
-                return true;
-            },
-        });
+    return str;
 };
 
 /**
@@ -78,29 +49,32 @@ function h(n, len)
 }
 
 
-if(typeof crypto !== "undefined" && crypto.getRandomValues)
+if(typeof window !== "undefined" && window.crypto && window.crypto.getRandomValues)
 {
     let rand_data = new Int32Array(1);
 
-    v86util.get_rand_int = function()
+    v86util.has_rand_int = function()
     {
-        crypto.getRandomValues(rand_data);
-        return rand_data[0];
+        return true;
     };
-}
-else if(typeof require !== "undefined")
-{
-    /** @type {{ randomBytes: Function }} */
-    const crypto = require("crypto");
 
     v86util.get_rand_int = function()
     {
-        return crypto.randomBytes(4)["readInt32LE"](0);
+        window.crypto.getRandomValues(rand_data);
+        return rand_data[0];
     };
 }
 else
 {
-    dbg_assert(false, "Unsupported platform: No cryptographic random values");
+    v86util.has_rand_int = function()
+    {
+        return false;
+    };
+
+    v86util.get_rand_int = function()
+    {
+        console.assert(false);
+    };
 }
 
 
@@ -110,8 +84,6 @@ else
  */
 function SyncBuffer(buffer)
 {
-    dbg_assert(buffer instanceof ArrayBuffer);
-
     this.buffer = buffer;
     this.byteLength = buffer.byteLength;
     this.onload = undefined;
@@ -155,53 +127,10 @@ SyncBuffer.prototype.get_buffer = function(fn)
     fn(this.buffer);
 };
 
-SyncBuffer.prototype.get_state = function()
-{
-    const state = [];
-    state[0] = this.byteLength;
-    state[1] = new Uint8Array(this.buffer);
-    return state;
-};
 
-SyncBuffer.prototype.set_state = function(state)
-{
-    this.byteLength = state[0];
-    this.buffer = state[1].slice().buffer;
-};
 
 (function()
 {
-    if(typeof Math.clz32 === "function" && Math.clz32(0) === 32 &&
-       Math.clz32(0x12345) === 15 && Math.clz32(-1) === 0)
-    {
-        /**
-         * calculate the integer logarithm base 2 of a byte
-         * @param {number} x
-         * @return {number}
-         */
-        v86util.int_log2_byte = function(x)
-        {
-            dbg_assert(x > 0);
-            dbg_assert(x < 0x100);
-
-            return 31 - Math.clz32(x);
-        };
-
-        /**
-         * calculate the integer logarithm base 2
-         * @param {number} x
-         * @return {number}
-         */
-        v86util.int_log2 = function(x)
-        {
-            dbg_assert(x > 0);
-
-            return 31 - Math.clz32(x);
-        };
-
-        return;
-    }
-
     var int_log2_table = new Int8Array(256);
 
     for(var i = 0, b = -2; i < 256; i++)
@@ -232,7 +161,6 @@ SyncBuffer.prototype.set_state = function(state)
      */
     v86util.int_log2 = function(x)
     {
-        x >>>= 0;
         dbg_assert(x > 0);
 
         // http://jsperf.com/integer-log2/6
@@ -469,80 +397,4 @@ CircularQueue.prototype.set = function(new_data)
 {
     this.data = new_data;
     this.index = 0;
-};
-
-function dump_file(ab, name)
-{
-    if(!(ab instanceof Array))
-    {
-        ab = [ab];
-    }
-
-    var blob = new Blob(ab);
-    download(blob, name);
-}
-
-function download(file_or_blob, name)
-{
-    var a = document.createElement("a");
-    a["download"] = name;
-    a.href = window.URL.createObjectURL(file_or_blob);
-    a.dataset["downloadurl"] = ["application/octet-stream", a["download"], a.href].join(":");
-
-    if(document.createEvent)
-    {
-        var ev = document.createEvent("MouseEvent");
-        ev.initMouseEvent("click", true, true, window,
-                          0, 0, 0, 0, 0, false, false, false, false, 0, null);
-        a.dispatchEvent(ev);
-    }
-    else
-    {
-        a.click();
-    }
-
-    window.URL.revokeObjectURL(a.href);
-}
-
-/**
- * A simple 1d bitmap
- * @constructor
- */
-v86util.Bitmap = function(length_or_buffer)
-{
-    if(typeof length_or_buffer === "number")
-    {
-        this.view = new Uint8Array(length_or_buffer + 7 >> 3);
-    }
-    else if(length_or_buffer instanceof ArrayBuffer)
-    {
-        this.view = new Uint8Array(length_or_buffer);
-    }
-    else
-    {
-        console.assert(false);
-    }
-};
-
-v86util.Bitmap.prototype.set = function(index, value)
-{
-    const bit_index = index & 7;
-    const byte_index = index >> 3;
-    const bit_mask = 1 << bit_index;
-
-    this.view[byte_index] =
-        value ? this.view[byte_index] | bit_mask : this.view[byte_index] & ~bit_mask;
-};
-
-v86util.Bitmap.prototype.get = function(index)
-{
-    const bit_index = index & 7;
-    const byte_index = index >> 3;
-
-    return this.view[byte_index] >> bit_index & 1;
-};
-
-v86util.Bitmap.prototype.get_buffer = function()
-{
-    return this.view.buffer;
 };

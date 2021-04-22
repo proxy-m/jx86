@@ -394,13 +394,9 @@ APIC.prototype.timer = function(now)
 
         if(mode === APIC_TIMER_MODE_PERIODIC)
         {
-            this.timer_current_count = this.timer_current_count % this.timer_initial_count;
-
-            if(this.timer_current_count <= 0)
-            {
-                this.timer_current_count += this.timer_initial_count;
-            }
-            dbg_assert(this.timer_current_count !== 0);
+            // This isn't exact, because timer_current_count might already be
+            // negative at this point since timer() fires late
+            this.timer_current_count = this.timer_initial_count;
 
             if((this.lvt_timer & IOAPIC_CONFIG_MASKED) === 0)
             {

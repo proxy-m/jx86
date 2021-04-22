@@ -6,7 +6,7 @@
 
 struct msr_info {
     int index;
-    const char *name;
+    char *name;
     struct tc {
         int valid;
         unsigned long long value;
@@ -78,20 +78,37 @@ static void test_msr_rw(int msr_index, unsigned long long input, unsigned long l
 {
     unsigned long long r = 0;
     int index;
-    const char *sptr;
+    char *sptr;
     if ((index = find_msr_info(msr_index)) != -1) {
         sptr = msr_info[index].name;
     } else {
-        printf("couldn't find name for msr # %#x, skipping\n", msr_index);
+        printf("couldn't find name for msr # 0x%x, skipping\n", msr_index);
         return;
     }
     wrmsr(msr_index, input);
     r = rdmsr(msr_index);
     if (expected != r) {
-        printf("testing %s: output = %#x:%#x expected = %#x:%#x\n", sptr,
+        printf("testing %s: output = 0x%x:0x%x expected = 0x%x:0x%x\n", sptr,
                (u32)(r >> 32), (u32)r, (u32)(expected >> 32), (u32)expected);
     }
-    report("%s", expected == r, sptr);
+    report(sptr, expected == r);
+}
+
+static void test_syscall_lazy_load(void)
+{
+#ifdef __x86_64__
+    extern void syscall_target();
+    u16 cs = read_cs(), ss = read_ss();
+    ulong tmp;
+
+    wrmsr(MSR_EFER, rdmsr(MSR_EFER) | EFER_SCE);
+    wrmsr(MSR_LSTAR, (ulong)syscall_target);
+    wrmsr(MSR_STAR, (uint64_t)cs << 32);
+    asm volatile("pushf; syscall; syscall_target: popf" : "=c"(tmp) : : "r11");
+    write_ss(ss);
+    // will crash horribly if broken
+    report("MSR_*STAR eager loading", true);
+#endif
 }
 
 int main(int ac, char **av)
@@ -106,6 +123,8 @@ int main(int ac, char **av)
             }
         }
     }
+
+    test_syscall_lazy_load();
 
     return report_summary();
 }

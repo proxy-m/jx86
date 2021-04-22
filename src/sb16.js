@@ -82,7 +82,6 @@ var DSP_COMMAND_SIZES = new Uint8Array(256);
 var DSP_COMMAND_HANDLERS = [];
 var MIXER_READ_HANDLERS = [];
 var MIXER_WRITE_HANDLERS = [];
-var MIXER_REGISTER_IS_LEGACY = new Uint8Array(256);
 var FM_HANDLERS = [];
 
 
@@ -96,6 +95,8 @@ function SB16(cpu, bus)
 {
     /** @const @type {CPU} */
     this.cpu = cpu;
+
+    this.cpu_paused = false;
 
     /** @const @type {BusConnector} */
     this.bus = bus;
@@ -111,8 +112,7 @@ function SB16(cpu, bus)
 
     // Mixer.
     this.mixer_current_address = 0;
-    this.mixer_registers = new Uint8Array(256);
-    this.mixer_reset();
+    this.mixer_unhandled_registers = new Uint8Array(256);
 
     // Dummy status and test registers.
     this.dummy_speaker_enabled = false;
@@ -134,6 +134,15 @@ function SB16(cpu, bus)
       new FloatQueue(DSP_DACSIZE),
     ];
 
+    // Number of repeated samples needed to approximate the
+    // emulated sample rate. TODO: This can be improved by
+    // doing some sort of sample rate conversion, or detuning,
+    // as it currently changes the pitch of every audio (slightly sharper).
+    this.dac_rate_ratio = 2;
+
+    // Number of samples requested on each audio-process.
+    this.dac_process_samples = SB_DMA_BLOCK_SAMPLES;
+
     // Direct Memory Access transfer info.
     this.dma = cpu.devices.dma;
     this.dma_sample_count = 0;
@@ -154,7 +163,6 @@ function SB16(cpu, bus)
     this.dma_waiting_transfer = false;
     this.dma_paused = false;
     this.sampling_rate = 22050;
-    bus.send("dac-tell-sampling-rate", this.sampling_rate);
     this.bytes_per_sample = 1;
 
     // DMA identification data.
@@ -177,45 +185,40 @@ function SB16(cpu, bus)
     this.irq = SB_IRQ;
     this.irq_triggered = new Uint8Array(0x10);
 
+    // Sample rate of the receiving end, i.e. the Web Audio Context.
+    this.audio_samplerate = 48000;
+
     // IO Ports.
     // http://homepages.cae.wisc.edu/~brodskye/sb16doc/sb16doc.html#DSPPorts
     // https://pdos.csail.mit.edu/6.828/2011/readings/hardware/SoundBlaster.pdf
 
-    cpu.io.register_read_consecutive(0x220, this,
-        this.port2x0_read, this.port2x1_read, this.port2x2_read, this.port2x3_read);
-    cpu.io.register_read_consecutive(0x388, this,
-        this.port2x0_read, this.port2x1_read);
-
-    cpu.io.register_read_consecutive(0x224, this,
-        this.port2x4_read, this.port2x5_read);
-
+    cpu.io.register_read(0x220, this, this.port2x0_read);
+    cpu.io.register_read(0x221, this, this.port2x1_read);
+    cpu.io.register_read(0x222, this, this.port2x2_read);
+    cpu.io.register_read(0x223, this, this.port2x3_read);
+    cpu.io.register_read(0x224, this, this.port2x4_read);
+    cpu.io.register_read(0x225, this, this.port2x5_read);
     cpu.io.register_read(0x226, this, this.port2x6_read);
     cpu.io.register_read(0x227, this, this.port2x7_read);
     cpu.io.register_read(0x228, this, this.port2x8_read);
     cpu.io.register_read(0x229, this, this.port2x9_read);
-
     cpu.io.register_read(0x22A, this, this.port2xA_read);
     cpu.io.register_read(0x22B, this, this.port2xB_read);
     cpu.io.register_read(0x22C, this, this.port2xC_read);
     cpu.io.register_read(0x22D, this, this.port2xD_read);
+    cpu.io.register_read(0x22E, this, this.port2xE_read);
+    cpu.io.register_read(0x22F, this, this.port2xF_read);
 
-    cpu.io.register_read_consecutive(0x22E, this,
-        this.port2xE_read, this.port2xF_read);
-
-    cpu.io.register_write_consecutive(0x220, this,
-        this.port2x0_write, this.port2x1_write, this.port2x2_write, this.port2x3_write);
-    cpu.io.register_write_consecutive(0x388, this,
-        this.port2x0_write, this.port2x1_write);
-
-    cpu.io.register_write_consecutive(0x224, this,
-        this.port2x4_write, this.port2x5_write);
-
+    cpu.io.register_write(0x220, this, this.port2x0_write);
+    cpu.io.register_write(0x221, this, this.port2x1_write);
+    cpu.io.register_write(0x222, this, this.port2x2_write);
+    cpu.io.register_write(0x223, this, this.port2x3_write);
+    cpu.io.register_write(0x224, this, this.port2x4_write);
+    cpu.io.register_write(0x225, this, this.port2x5_write);
     cpu.io.register_write(0x226, this, this.port2x6_write);
     cpu.io.register_write(0x227, this, this.port2x7_write);
-
-    cpu.io.register_write_consecutive(0x228, this,
-        this.port2x8_write, this.port2x9_write);
-
+    cpu.io.register_write(0x228, this, this.port2x8_write);
+    cpu.io.register_write(0x229, this, this.port2x9_write);
     cpu.io.register_write(0x22A, this, this.port2xA_write);
     cpu.io.register_write(0x22B, this, this.port2xB_write);
     cpu.io.register_write(0x22C, this, this.port2xC_write);
@@ -223,29 +226,45 @@ function SB16(cpu, bus)
     cpu.io.register_write(0x22E, this, this.port2xE_write);
     cpu.io.register_write(0x22F, this, this.port2xF_write);
 
-    cpu.io.register_read_consecutive(0x330, this, this.port3x0_read, this.port3x1_read);
-    cpu.io.register_write_consecutive(0x330, this, this.port3x0_write, this.port3x1_write);
+    cpu.io.register_read(0x330, this, this.port3x0_read);
+    cpu.io.register_read(0x331, this, this.port3x1_read);
+    cpu.io.register_write(0x330, this, this.port3x0_write);
+    cpu.io.register_write(0x331, this, this.port3x1_write);
 
     this.dma.on_unmask(this.dma_on_unmask, this);
 
-    bus.register("dac-request-data", function()
+    bus.register("speaker-tell-samplerate", function(rate)
     {
-        this.dac_handle_request();
+        this.audio_samplerate = rate;
     }, this);
-    bus.register("speaker-has-initialized", function()
-    {
-        this.mixer_reset();
-    }, this);
-    bus.send("speaker-confirm-initialized");
 
-    this.dsp_reset();
+    bus.send("speaker-request-samplerate");
+
+    bus.register("speaker-request-data", function(size)
+    {
+        this.audio_send(size);
+    }, this);
+
+    bus.register("cpu-stop", function()
+    {
+        this.cpu_paused = true;
+        bus.send("speaker-update-enable", false);
+    }, this);
+
+    bus.register("cpu-run", function()
+    {
+        this.cpu_paused = false;
+        bus.send("speaker-update-enable", !this.dma_paused);
+    }, this);
+
+    this.reset_dsp();
 }
 
 //
 // General
 //
 
-SB16.prototype.dsp_reset = function()
+SB16.prototype.reset_dsp = function()
 {
     this.write_buffer.clear();
     this.read_buffer.clear();
@@ -263,6 +282,7 @@ SB16.prototype.dsp_reset = function()
 
     this.dac_buffers[0].clear();
     this.dac_buffers[1].clear();
+    this.dac_rate_ratio = 2;
 
     this.dma_sample_count = 0;
     this.dma_bytes_count = 0;
@@ -301,7 +321,7 @@ SB16.prototype.get_state = function()
     state[4] = this.command_size;
 
     state[5] = this.mixer_current_address;
-    state[6] = this.mixer_registers;
+    state[6] = this.mixer_unhandled_registers;
 
     state[7] = this.dummy_speaker_enabled;
     state[8] = this.test_register;
@@ -312,7 +332,7 @@ SB16.prototype.get_state = function()
     state[12] = this.dsp_signed;
 
     // state[13] = this.dac_buffers;
-    //state[14]
+    state[14] = this.dac_rate_ratio;
 
     state[15] = this.dma_sample_count;
     state[16] = this.dma_bytes_count;
@@ -339,7 +359,7 @@ SB16.prototype.get_state = function()
 
     state[34] = this.irq;
     state[35] = this.irq_triggered;
-    //state[36]
+    state[36] = this.audio_samplerate;
 
     return state;
 };
@@ -354,8 +374,7 @@ SB16.prototype.set_state = function(state)
     this.command_size = state[4];
 
     this.mixer_current_address = state[5];
-    this.mixer_registers = state[6];
-    this.mixer_full_update();
+    this.mixer_unhandled_registers = state[6];
 
     this.dummy_speaker_enabled = state[7];
     this.test_register = state[8];
@@ -366,7 +385,7 @@ SB16.prototype.set_state = function(state)
     this.dsp_signed = state[12];
 
     // this.dac_buffers = state[13];
-    //state[14]
+    this.dac_rate_ratio = state[14];
 
     this.dma_sample_count = state[15];
     this.dma_bytes_count = state[16];
@@ -393,7 +412,7 @@ SB16.prototype.set_state = function(state)
 
     this.irq = state[34];
     this.irq_triggered = state[35];
-    //state[36];
+    this.audio_samplerate = state[36];
 
     this.dma_buffer = this.dma_buffer_uint8.buffer;
     this.dma_buffer_int8 = new Int8Array(this.dma_buffer);
@@ -401,14 +420,7 @@ SB16.prototype.set_state = function(state)
     this.dma_buffer_uint16 = new Uint16Array(this.dma_buffer);
     this.dma_syncbuffer = new SyncBuffer(this.dma_buffer);
 
-    if(this.dma_paused)
-    {
-        this.bus.send("dac-disable");
-    }
-    else
-    {
-        this.bus.send("dac-enable");
-    }
+    this.bus.send("speaker-update-enable", !this.dma_paused);
 };
 
 //
@@ -450,7 +462,12 @@ SB16.prototype.port2x4_read = function()
 SB16.prototype.port2x5_read = function()
 {
     dbg_log("225 read: mixer data port", LOG_SB16);
-    return this.mixer_read(this.mixer_current_address);
+    var handler = MIXER_READ_HANDLERS[this.mixer_current_address];
+    if(!handler)
+    {
+        handler = this.mixer_default_read;
+    }
+    return handler.call(this);
 };
 
 SB16.prototype.port2x6_read = function()
@@ -478,7 +495,7 @@ SB16.prototype.port2x9_read = function()
 };
 
 // Read Data.
-// Used to access in-bound DSP data.
+// Used to acces in-bound DSP data.
 SB16.prototype.port2xA_read = function()
 {
     dbg_log("22A read: read data", LOG_SB16);
@@ -583,7 +600,12 @@ SB16.prototype.port2x4_write = function(value)
 SB16.prototype.port2x5_write = function(value)
 {
     dbg_log("225 write: mixer data = " + h(value), LOG_SB16);
-    this.mixer_write(this.mixer_current_address, value);
+    var handler = MIXER_WRITE_HANDLERS[this.mixer_current_address];
+    if(!handler)
+    {
+        handler = this.mixer_default_write;
+    }
+    handler.call(this, value);
 };
 
 // Reset.
@@ -600,7 +622,7 @@ SB16.prototype.port2x6_write = function(yesplease)
     else if(yesplease)
     {
         dbg_log(" -> reset", LOG_SB16);
-        this.dsp_reset();
+        this.reset_dsp();
     }
 
     // Signal completion.
@@ -791,7 +813,7 @@ register_dsp_command([0x10], 1, function()
 
     this.dac_buffers[0].push(value);
     this.dac_buffers[1].push(value);
-    this.bus.send("dac-enable");
+    this.bus.send("speaker-update-enable", true);
 });
 
 // 8-bit single-cycle DMA mode digitized sound output.
@@ -807,7 +829,7 @@ register_dsp_command([0x14, 0x15], 2, function()
     this.dma_transfer_start();
 });
 
-// Creative 8-bit to 2-bit ADPCM single-cycle DMA mode digitized sound output.
+// Creative 8-bit to 2-bit ADPCM single-cycle DMA mode digitzed sound output.
 register_dsp_command([0x16], 2);
 
 // Creative 8-bit to 2-bit ADPCM single-cycle DMA mode digitzed sound output
@@ -868,9 +890,10 @@ register_dsp_command([0x38], 0);
 // Set digitized sound transfer Time Constant.
 register_dsp_command([0x40], 1, function()
 {
-    // Note: bTimeConstant = 256 * time constant
     this.sampling_rate_change(
-        1000000 / (256 - this.write_buffer.shift()) / this.get_channel_count()
+        1000000
+        / (256 - this.write_buffer.shift())
+        / this.get_channel_count()
     );
 });
 
@@ -987,7 +1010,7 @@ register_dsp_command(any_first_digit(0xC0), 3, function()
 register_dsp_command([0xD0], 0, function()
 {
     this.dma_paused = true;
-    this.bus.send("dac-disable");
+    this.bus.send("speaker-update-enable", false);
 });
 
 // Turn on speaker.
@@ -1008,21 +1031,21 @@ register_dsp_command([0xD3], 0, function()
 register_dsp_command([0xD4], 0, function()
 {
     this.dma_paused = false;
-    this.bus.send("dac-enable");
+    this.bus.send("speaker-update-enable", true);
 });
 
 // Pause 16-bit DMA mode digitized sound I/O.
 register_dsp_command([0xD5], 0, function()
 {
     this.dma_paused = true;
-    this.bus.send("dac-disable");
+    this.bus.send("speaker-update-enable", false);
 });
 
 // Continue 16-bit DMA mode digitized sound I/O.
 register_dsp_command([0xD6], 0, function()
 {
     this.dma_paused = false;
-    this.bus.send("dac-enable");
+    this.bus.send("speaker-update-enable", true);
 });
 
 // Get speaker status.
@@ -1103,101 +1126,19 @@ register_dsp_command([0xF9], 1, function()
 });
 
 //
-// Mixer Handlers (CT1745)
+// Mixer Handlers
 //
-
-SB16.prototype.mixer_read = function(address)
-{
-    var handler = MIXER_READ_HANDLERS[address];
-    var data;
-    if(handler)
-    {
-        data = handler.call(this);
-    }
-    else
-    {
-        data = this.mixer_registers[address];
-        dbg_log("unhandled mixer register read. addr:" + h(address) + " data:" + h(data), LOG_SB16);
-    }
-    return data;
-};
-
-SB16.prototype.mixer_write = function(address, data)
-{
-    var handler = MIXER_WRITE_HANDLERS[address];
-    if(handler)
-    {
-        handler.call(this, data);
-    }
-    else
-    {
-        dbg_log("unhandled mixer register write. addr:" + h(address) + " data:" + h(data), LOG_SB16);
-    }
-};
 
 SB16.prototype.mixer_default_read = function()
 {
-    dbg_log("mixer register read. addr:" + h(this.mixer_current_address), LOG_SB16);
-    return this.mixer_registers[this.mixer_current_address];
+    dbg_log("unhandled mixer register read. addr:" + h(this.mixer_current_address), LOG_SB16);
+    return this.mixer_unhandled_registers[this.mixer_current_address];
 };
 
 SB16.prototype.mixer_default_write = function(data)
 {
-    dbg_log("mixer register write. addr:" + h(this.mixer_current_address) + " data:" + h(data), LOG_SB16);
-    this.mixer_registers[this.mixer_current_address] = data;
-};
-
-SB16.prototype.mixer_reset = function()
-{
-    // Values intentionally in decimal.
-    // Default values available at
-    // https://pdos.csail.mit.edu/6.828/2011/readings/hardware/SoundBlaster.pdf
-    this.mixer_registers[0x04] = 12 << 4 | 12;
-    this.mixer_registers[0x22] = 12 << 4 | 12;
-    this.mixer_registers[0x26] = 12 << 4 | 12;
-    this.mixer_registers[0x28] = 0;
-    this.mixer_registers[0x2E] = 0;
-    this.mixer_registers[0x0A] = 0;
-    this.mixer_registers[0x30] = 24 << 3;
-    this.mixer_registers[0x31] = 24 << 3;
-    this.mixer_registers[0x32] = 24 << 3;
-    this.mixer_registers[0x33] = 24 << 3;
-    this.mixer_registers[0x34] = 24 << 3;
-    this.mixer_registers[0x35] = 24 << 3;
-    this.mixer_registers[0x36] = 0;
-    this.mixer_registers[0x37] = 0;
-    this.mixer_registers[0x38] = 0;
-    this.mixer_registers[0x39] = 0;
-    this.mixer_registers[0x3B] = 0;
-    this.mixer_registers[0x3C] = 0x1F;
-    this.mixer_registers[0x3D] = 0x15;
-    this.mixer_registers[0x3E] = 0x0B;
-    this.mixer_registers[0x3F] = 0;
-    this.mixer_registers[0x40] = 0;
-    this.mixer_registers[0x41] = 0;
-    this.mixer_registers[0x42] = 0;
-    this.mixer_registers[0x43] = 0;
-    this.mixer_registers[0x44] = 8 << 4;
-    this.mixer_registers[0x45] = 8 << 4;
-    this.mixer_registers[0x46] = 8 << 4;
-    this.mixer_registers[0x47] = 8 << 4;
-
-    this.mixer_full_update();
-};
-
-SB16.prototype.mixer_full_update = function()
-{
-    // Start at 1. Don't re-reset.
-    for(var i = 1; i < this.mixer_registers.length; i++)
-    {
-        if(MIXER_REGISTER_IS_LEGACY[i])
-        {
-            // Legacy registers are actually mapped to other register locations. Update
-            // using the new registers rather than the legacy registers.
-            continue;
-        }
-        this.mixer_write(i, this.mixer_registers[i]);
-    }
+    dbg_log("unhandled mixer register write. addr:" + h(this.mixer_current_address) + " data:" + h(data), LOG_SB16);
+    this.mixer_unhandled_registers[this.mixer_current_address] = data;
 };
 
 /**
@@ -1226,207 +1167,19 @@ function register_mixer_write(address, handler)
     MIXER_WRITE_HANDLERS[address] = handler;
 }
 
-// Legacy registers map each nibble to the last 4 bits of the new registers
-function register_mixer_legacy(address_old, address_new_left, address_new_right)
-{
-    MIXER_REGISTER_IS_LEGACY[address_old] = 1;
-
-    /** @this {SB16} */
-    MIXER_READ_HANDLERS[address_old] = function()
-    {
-        var left = this.mixer_registers[address_new_left] & 0xF0;
-        var right = this.mixer_registers[address_new_right] >>> 4;
-        return left | right;
-    };
-
-    /** @this {SB16} */
-    MIXER_WRITE_HANDLERS[address_old] = function(data)
-    {
-        this.mixer_registers[address_old] = data;
-        var prev_left = this.mixer_registers[address_new_left];
-        var prev_right = this.mixer_registers[address_new_right];
-        var left = (data & 0xF0) | (prev_left & 0x0F);
-        var right = (data << 4 & 0xF0) | (prev_right & 0x0F);
-
-        this.mixer_write(address_new_left, left);
-        this.mixer_write(address_new_right, right);
-    };
-}
-
-/**
- * @param {number} address
- * @param {number} mixer_source
- * @param {number} channel
- */
-function register_mixer_volume(address, mixer_source, channel)
-{
-    MIXER_READ_HANDLERS[address] = SB16.prototype.mixer_default_read;
-
-    /** @this {SB16} */
-    MIXER_WRITE_HANDLERS[address] = function(data)
-    {
-        this.mixer_registers[address] = data;
-        this.bus.send("mixer-volume",
-        [
-            mixer_source,
-            channel,
-            (data >>> 2) - 62
-        ]);
-    };
-}
-
 // Reset.
 register_mixer_read(0x00, function()
 {
-    this.mixer_reset();
     return 0;
 });
 register_mixer_write(0x00);
 
-// Legacy Voice Volume Left/Right.
-register_mixer_legacy(0x04, 0x32, 0x33);
-
-// Legacy Mic Volume. TODO.
-//register_mixer_read(0x0A);
-//register_mixer_write(0x0A, function(data)
-//{
-//    this.mixer_registers[0x0A] = data;
-//    var prev = this.mixer_registers[0x3A];
-//    this.mixer_write(0x3A, data << 5 | (prev & 0x0F));
-//});
-
-// Legacy Master Volume Left/Right.
-register_mixer_legacy(0x22, 0x30, 0x31);
-// Legacy Midi Volume Left/Right.
-register_mixer_legacy(0x26, 0x34, 0x35);
-// Legacy CD Volume Left/Right.
-register_mixer_legacy(0x28, 0x36, 0x37);
-// Legacy Line Volume Left/Right.
-register_mixer_legacy(0x2E, 0x38, 0x39);
-
-// Master Volume Left.
-register_mixer_volume(0x30, MIXER_SRC_MASTER, MIXER_CHANNEL_LEFT);
-// Master Volume Right.
-register_mixer_volume(0x31, MIXER_SRC_MASTER, MIXER_CHANNEL_RIGHT);
-// Voice Volume Left.
-register_mixer_volume(0x32, MIXER_SRC_DAC, MIXER_CHANNEL_LEFT);
-// Voice Volume Right.
-register_mixer_volume(0x33, MIXER_SRC_DAC, MIXER_CHANNEL_RIGHT);
-// MIDI Volume Left. TODO.
-//register_mixer_volume(0x34, MIXER_SRC_SYNTH, MIXER_CHANNEL_LEFT);
-// MIDI Volume Right. TODO.
-//register_mixer_volume(0x35, MIXER_SRC_SYNTH, MIXER_CHANNEL_RIGHT);
-// CD Volume Left. TODO.
-//register_mixer_volume(0x36, MIXER_SRC_CD, MIXER_CHANNEL_LEFT);
-// CD Volume Right. TODO.
-//register_mixer_volume(0x37, MIXER_SRC_CD, MIXER_CHANNEL_RIGHT);
-// Line Volume Left. TODO.
-//register_mixer_volume(0x38, MIXER_SRC_LINE, MIXER_CHANNEL_LEFT);
-// Line Volume Right. TODO.
-//register_mixer_volume(0x39, MIXER_SRC_LINE, MIXER_CHANNEL_RIGHT);
-// Mic Volume. TODO.
-//register_mixer_volume(0x3A, MIXER_SRC_MIC, MIXER_CHANNEL_BOTH);
-
-// PC Speaker Volume.
-register_mixer_read(0x3B);
-register_mixer_write(0x3B, function(data)
+// Output Stereo Select.
+register_mixer_write(0x0E, function(bits)
 {
-    this.mixer_registers[0x3B] = data;
-    this.bus.send("mixer-volume", [MIXER_SRC_PCSPEAKER, MIXER_CHANNEL_BOTH, (data >>> 6) * 6 - 18]);
-});
-
-// Output Mixer Switches. TODO.
-//register_mixer_read(0x3C);
-//register_mixer_write(0x3C, function(data)
-//{
-//    this.mixer_registers[0x3C] = data;
-//
-//    if(data & 0x01) this.bus.send("mixer-connect", [MIXER_SRC_MIC, MIXER_CHANNEL_BOTH]);
-//    else this.bus.send("mixer-disconnect", [MIXER_SRC_MIC, MIXER_CHANNEL_BOTH]);
-//
-//    if(data & 0x02) this.bus.send("mixer-connect", [MIXER_SRC_CD, MIXER_CHANNEL_RIGHT]);
-//    else this.bus.send("mixer-disconnect", [MIXER_SRC_CD, MIXER_CHANNEL_RIGHT]);
-//
-//    if(data & 0x04) this.bus.send("mixer-connect", [MIXER_SRC_CD, MIXER_CHANNEL_LEFT]);
-//    else this.bus.send("mixer-disconnect", [MIXER_SRC_CD, MIXER_CHANNEL_LEFT]);
-//
-//    if(data & 0x08) this.bus.send("mixer-connect", [MIXER_SRC_LINE, MIXER_CHANNEL_RIGHT]);
-//    else this.bus.send("mixer-disconnect", [MIXER_SRC_LINE, MIXER_CHANNEL_RIGHT]);
-//
-//    if(data & 0x10) this.bus.send("mixer-connect", [MIXER_SRC_LINE, MIXER_CHANNEL_LEFT]);
-//    else this.bus.send("mixer-disconnect", [MIXER_SRC_LINE, MIXER_CHANNEL_LEFT]);
-//});
-
-// Input Mixer Left Switches. TODO.
-//register_mixer_read(0x3D);
-//register_mixer_write(0x3D);
-
-// Input Mixer Right Switches. TODO.
-//register_mixer_read(0x3E);
-//register_mixer_write(0x3E);
-
-// Input Gain Left. TODO.
-//register_mixer_read(0x3F);
-//register_mixer_write(0x3F);
-
-// Input Gain Right. TODO.
-//register_mixer_read(0x40);
-//register_mixer_write(0x40);
-
-// Output Gain Left.
-register_mixer_read(0x41);
-register_mixer_write(0x41, function(data)
-{
-    this.mixer_registers[0x41] = data;
-    this.bus.send("mixer-gain-left", (data >>> 6) * 6);
-});
-
-// Output Gain Right.
-register_mixer_read(0x42);
-register_mixer_write(0x42, function(data)
-{
-    this.mixer_registers[0x42] = data;
-    this.bus.send("mixer-gain-right", (data >>> 6) * 6);
-});
-
-// Mic AGC. TODO.
-//register_mixer_read(0x43);
-//register_mixer_write(0x43);
-
-// Treble Left.
-register_mixer_read(0x44);
-register_mixer_write(0x44, function(data)
-{
-    this.mixer_registers[0x44] = data;
-    data >>>= 3;
-    this.bus.send("mixer-treble-left", data - (data < 16 ? 14 : 16));
-});
-
-// Treble Right.
-register_mixer_read(0x45);
-register_mixer_write(0x45, function(data)
-{
-    this.mixer_registers[0x45] = data;
-    data >>>= 3;
-    this.bus.send("mixer-treble-right", data - (data < 16 ? 14 : 16));
-});
-
-// Bass Left.
-register_mixer_read(0x46);
-register_mixer_write(0x46, function(data)
-{
-    this.mixer_registers[0x46] = data;
-    data >>>= 3;
-    this.bus.send("mixer-bass-right", data - (data < 16 ? 14 : 16));
-});
-
-// Bass Right.
-register_mixer_read(0x47);
-register_mixer_write(0x47, function(data)
-{
-    this.mixer_registers[0x47] = data;
-    data >>>= 3;
-    this.bus.send("mixer-bass-right", data - (data < 16 ? 14 : 16));
+    this.dsp_stereo = bits & 0x2;
+    this.bus.send("speaker-stereo", this.dsp_stereo);
+    this.bus.send("speaker-filter", bits & 0x20);
 });
 
 // IRQ Select.
@@ -1677,7 +1430,7 @@ register_fm_write(between(0xE0, 0xF5), function(bits, register, address)
 SB16.prototype.fm_update_waveforms = function()
 {
     // To be implemented.
-};
+}
 
 //
 // General behaviours
@@ -1686,7 +1439,6 @@ SB16.prototype.fm_update_waveforms = function()
 SB16.prototype.sampling_rate_change = function(rate)
 {
     this.sampling_rate = rate;
-    this.bus.send("dac-tell-sampling-rate", rate);
 };
 
 SB16.prototype.get_channel_count = function()
@@ -1714,19 +1466,13 @@ SB16.prototype.dma_transfer_start = function()
     // Learnt the hard way.
     // if(this.dsp_stereo) this.bytes_per_sample *= 2;
 
+    this.dac_rate_ratio = Math.round(this.audio_samplerate / this.sampling_rate);
+
     this.dma_bytes_count = this.dma_sample_count * this.bytes_per_sample;
     this.dma_bytes_block = SB_DMA_BLOCK_SAMPLES * this.bytes_per_sample;
 
-    // Ensure block size is small enough but not too small, and is divisible by 4
-    var max_bytes_block = Math.max(this.dma_bytes_count >> 2 & ~0x3, 32);
-    this.dma_bytes_block = Math.min(max_bytes_block, this.dma_bytes_block);
-
-    // (2) Wait until channel is unmasked (if not already)
+    // (2) Wait for unmask event.
     this.dma_waiting_transfer = true;
-    if(!this.dma.channel_mask[this.dma_channel])
-    {
-        this.dma_on_unmask(this.dma_channel);
-    }
 };
 
 SB16.prototype.dma_on_unmask = function(channel)
@@ -1736,16 +1482,29 @@ SB16.prototype.dma_on_unmask = function(channel)
         return;
     }
 
-    // (3) Configure amount of bytes left to transfer and tell speaker adapter
-    // to start requesting transfers
+    // (3) Configure amount of bytes left to transfer and begin first
+    // block of transfer when the DMA channel has been unmasked.
     this.dma_waiting_transfer = false;
     this.dma_bytes_left = this.dma_bytes_count;
     this.dma_paused = false;
-    this.bus.send("dac-enable");
+    this.bus.send("speaker-update-enable", true);
+    this.dma_transfer_next();
 };
 
 SB16.prototype.dma_transfer_next = function()
 {
+    // No more data to transfer.
+    if(!this.dma_bytes_left) return;
+
+    // DAC has enough samples buffered for now.
+    // Don't transfer too much too early, or else the DMA counters will not
+    // accurately reflect the amount of audio that has already been
+    // played back by the Web Audio API.
+    if(this.dac_buffers[0].length > this.dac_process_samples * 2) return;
+
+    // Do not transfer if paused.
+    if(this.cpu_paused || this.dma_paused) return;
+
     dbg_log("dma transfering next block", LOG_SB16);
 
     var size = Math.min(this.dma_bytes_left, this.dma_bytes_block);
@@ -1770,6 +1529,9 @@ SB16.prototype.dma_transfer_next = function()
                 this.dma_bytes_left = this.dma_bytes_count;
             }
         }
+
+        // Keep transfering until dac_buffer contains enough data.
+        setTimeout(() => { this.dma_transfer_next(); }, 0);
     });
 };
 
@@ -1777,7 +1539,7 @@ SB16.prototype.dma_to_dac = function(sample_count)
 {
     var amplitude = this.dsp_16bit ? 32767.5 : 127.5;
     var offset = this.dsp_signed ? 0 : -1;
-    var repeats = this.dsp_stereo ? 1 : 2;
+    var repeats = (this.dsp_stereo ? 1 : 2) * this.dac_rate_ratio;
 
     var buffer;
     if(this.dsp_16bit)
@@ -1799,33 +1561,24 @@ SB16.prototype.dma_to_dac = function(sample_count)
             channel ^= 1;
         }
     }
-
-    this.dac_send();
 };
 
-SB16.prototype.dac_handle_request = function()
+SB16.prototype.audio_send = function(size)
 {
-    if(!this.dma_bytes_left || this.dma_paused)
-    {
-        // No more data to transfer or is paused. Send whatever is in the buffers.
-        this.dac_send();
-    }
-    else
-    {
-        this.dma_transfer_next();
-    }
-};
+    this.dac_process_samples = size;
 
-SB16.prototype.dac_send = function()
-{
-    if(!this.dac_buffers[0].length)
+    if(this.dac_buffers[0].length && this.dac_buffers[0].length < this.dac_process_samples * 2)
     {
-        return;
+        dbg_log("dac_buffer contains only " +
+            (this.dac_buffers[0].length / 2) +
+            " samples out of " + this.dac_process_samples + " needed", LOG_SB16);
     }
 
-    var out0 = this.dac_buffers[0].shift_block(this.dac_buffers[0].length);
-    var out1 = this.dac_buffers[1].shift_block(this.dac_buffers[1].length);
-    this.bus.send("dac-send-data", [out0, out1], [out0.buffer, out1.buffer]);
+    var out0 = this.dac_buffers[0].shift_block(size);
+    var out1 = this.dac_buffers[1].shift_block(size);
+    this.bus.send("speaker-update-data", [out0, out1], [out0.buffer, out1.buffer]);
+
+    setTimeout(() => { this.dma_transfer_next(); }, 0);
 };
 
 SB16.prototype.raise_irq = function(type)

@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-process.on("unhandledRejection", exn => { throw exn; });
-
-const TEST_RELEASE_BUILD = +process.env.TEST_RELEASE_BUILD;
-
-var V86 = require(`../../build/${TEST_RELEASE_BUILD ? "libv86" : "libv86-debug"}.js`).V86;
+var V86 = require("../../build/libv86.js").V86;
 var fs = require("fs");
 
 var test_executable = new Uint8Array(fs.readFileSync(__dirname + "/test-i386"));
@@ -13,11 +9,10 @@ var test_executable = new Uint8Array(fs.readFileSync(__dirname + "/test-i386"));
 var emulator = new V86({
     bios: { url: __dirname + "/../../bios/seabios.bin" },
     vga_bios: { url: __dirname + "/../../bios/vgabios.bin" },
-    cdrom: { url: __dirname + "/../../images/linux4.iso" },
+    cdrom: { url: __dirname + "/../../images/linux3.iso" },
     autostart: true,
     memory_size: 32 * 1024 * 1024,
     filesystem: {},
-    log_level: 0,
 });
 
 emulator.bus.register("emulator-started", function()
@@ -42,7 +37,7 @@ emulator.add_listener("serial0-output-char", function(chr)
         console.error("Serial: %s", line);
         line = "";
     }
-    else if(chr >= " " && chr <= "~")
+    else
     {
         line += chr;
     }
@@ -61,13 +56,9 @@ emulator.add_listener("serial0-output-char", function(chr)
 
         emulator.read_file("/result", function(err, data)
             {
-                if(err)
-                {
-                    console.error("Reading test result failed: " + err);
-                    process.exit(1);
-                }
+                if(err) throw err;
                 console.error("Got result, writing to stdout");
-                process.stdout.write(Buffer.from(data));
+                process.stdout.write(new Buffer(data));
                 emulator.stop();
             });
     }

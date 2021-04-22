@@ -1,10 +1,3 @@
-/*
- * libc printf and friends
- *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Library General Public License version 2.
- */
-
 #include "libcflat.h"
 
 #define BUFSZ 2000
@@ -18,7 +11,6 @@ typedef struct pstream {
 typedef struct strprops {
     char pad;
     int npad;
-    bool alternate;
 } strprops_t;
 
 static void addchar(pstream_t *p, char c)
@@ -30,7 +22,7 @@ static void addchar(pstream_t *p, char c)
     ++p->added;
 }
 
-static void print_str(pstream_t *p, const char *s, strprops_t props)
+void print_str(pstream_t *p, const char *s, strprops_t props)
 {
     const char *s_orig = s;
     int npad = props.npad;
@@ -58,7 +50,7 @@ static void print_str(pstream_t *p, const char *s, strprops_t props)
 
 static char digits[16] = "0123456789abcdef";
 
-static void print_int(pstream_t *ps, long long n, int base, strprops_t props)
+void print_int(pstream_t *ps, long long n, int base, strprops_t props)
 {
     char buf[sizeof(long) * 3 + 2], *p = buf;
     int s = 0, i;
@@ -92,10 +84,10 @@ static void print_int(pstream_t *ps, long long n, int base, strprops_t props)
     print_str(ps, buf, props);
 }
 
-static void print_unsigned(pstream_t *ps, unsigned long long n, int base,
-			   strprops_t props)
+void print_unsigned(pstream_t *ps, unsigned long long n, int base,
+		    strprops_t props)
 {
-    char buf[sizeof(long) * 3 + 3], *p = buf;
+    char buf[sizeof(long) * 3 + 1], *p = buf;
     int i;
 
     while (n) {
@@ -105,18 +97,6 @@ static void print_unsigned(pstream_t *ps, unsigned long long n, int base,
 
     if (p == buf)
 	*p++ = '0';
-    else if (props.alternate && base == 16) {
-	if (props.pad == '0') {
-	    addchar(ps, '0');
-	    addchar(ps, 'x');
-
-	    if (props.npad > 0)
-		props.npad = MAX(props.npad - 2, 0);
-	} else {
-	    *p++ = 'x';
-	    *p++ = '0';
-	}
-    }
 
     for (i = 0; i < (p - buf) / 2; ++i) {
 	char tmp;
@@ -177,9 +157,6 @@ int vsnprintf(char *buf, int size, const char *fmt, va_list va)
 	case '\0':
 	    --fmt;
 	    break;
-	case '#':
-	    props.alternate = true;
-	    goto morefmt;
 	case '0':
 	    props.pad = '0';
 	    ++fmt;
@@ -191,15 +168,6 @@ int vsnprintf(char *buf, int size, const char *fmt, va_list va)
 	    goto morefmt;
 	case 'l':
 	    ++nlong;
-	    goto morefmt;
-	case 't':
-	case 'z':
-	    /* Here we only care that sizeof(size_t) == sizeof(long).
-	     * On a 32-bit platform it doesn't matter that size_t is
-	     * typedef'ed to int or long; va_arg will work either way.
-	     * Same for ptrdiff_t (%td).
-	     */
-	    nlong = 1;
 	    goto morefmt;
 	case 'd':
 	    switch (nlong) {
@@ -241,7 +209,7 @@ int vsnprintf(char *buf, int size, const char *fmt, va_list va)
 	    }
 	    break;
 	case 'p':
-	    props.alternate = true;
+	    print_str(&s, "0x", props);
 	    print_unsigned(&s, (unsigned long)va_arg(va, void *), 16, props);
 	    break;
 	case 's':
@@ -253,6 +221,7 @@ int vsnprintf(char *buf, int size, const char *fmt, va_list va)
 	}
     }
     *s.buffer = 0;
+    ++s.added;
     return s.added;
 }
 
@@ -289,34 +258,4 @@ int printf(const char *fmt, ...)
     va_end(va);
     puts(buf);
     return r;
-}
-
-void binstr(unsigned long x, char out[BINSTR_SZ])
-{
-	int i;
-	char *c;
-	int n;
-
-	n = sizeof(unsigned long) * 8;
-	i = 0;
-	c = &out[0];
-	for (;;) {
-		*c++ = (x & (1ul << (n - i - 1))) ? '1' : '0';
-		i++;
-
-		if (i == n) {
-			*c = '\0';
-			break;
-		}
-		if (i % 4 == 0)
-			*c++ = '\'';
-	}
-	assert(c + 1 - &out[0] == BINSTR_SZ);
-}
-
-void print_binstr(unsigned long x)
-{
-	char out[BINSTR_SZ];
-	binstr(x, out);
-	printf("%s", out);
 }
