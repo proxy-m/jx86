@@ -325,7 +325,7 @@ build/libwabt.js:
 	mkdir -p build
 	wget -nv -P build https://github.com/WebAssembly/wabt/archive/1.0.6.zip
 	unzip -j -d build/ build/1.0.6.zip wabt-1.0.6/demo/libwabt.js
-	rm build/1.0.6.zip
+	#rm build/1.0.6.zip
 
 build/xterm.js:
 	curl https://cdn.jsdelivr.net/npm/xterm@4.9.0/lib/xterm.js > build/xterm.js
