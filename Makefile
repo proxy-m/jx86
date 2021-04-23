@@ -3,7 +3,25 @@ CLOSURE=$(CLOSURE_DIR)/compiler.jar
 BROWSER=chromium
 NASM_TEST_DIR=./tests/nasm
 
-all: build/v86_all.js
+INSTRUCTION_TABLES=src/rust/gen/jit.rs src/rust/gen/jit0f.rs \
+                  src/rust/gen/interpreter.rs src/rust/gen/interpreter0f.rs \
+                  src/rust/gen/analyzer.rs src/rust/gen/analyzer0f.rs \
+
+# Only the dependencies common to both generate_{jit,interpreter}.js
+GEN_DEPENDENCIES=$(filter-out gen/generate_interpreter.js gen/generate_jit.js gen/generate_analyzer.js, $(wildcard gen/*.js))
+JIT_DEPENDENCIES=$(GEN_DEPENDENCIES) gen/generate_jit.js
+INTERPRETER_DEPENDENCIES=$(GEN_DEPENDENCIES) gen/generate_interpreter.js
+ANALYZER_DEPENDENCIES=$(GEN_DEPENDENCIES) gen/generate_analyzer.js
+
+STRIP_DEBUG_FLAG=
+ifeq ($(STRIP_DEBUG),true)
+STRIP_DEBUG_FLAG=--v86-strip-debug
+endif
+
+default: build/v86-debug.wasm
+all: build/v86_all.js build/libv86.js
+all-debug: build/libv86-debug.js build/v86-debug.wasm
+
 browser: build/v86_all.js
 
 # Used for nodejs builds and in order to profile code.
@@ -27,7 +45,7 @@ CLOSURE_SOURCE_MAP=\
 		#--jscomp_error newCheckTypes\
 
 CLOSURE_FLAGS=\
-	        --js lib/closure-base.js\
+		--js lib/closure-base.js\
 		--generate_exports\
 		--externs src/externs.js\
 		--warning_level VERBOSE\
@@ -43,15 +61,11 @@ CLOSURE_FLAGS=\
 		--jscomp_error deprecated\
 		--jscomp_error deprecatedAnnotations\
 		--jscomp_error duplicateMessage\
-		--jscomp_error es3\
 		--jscomp_error es5Strict\
 		--jscomp_error externsValidation\
-		--jscomp_error fileoverviewTags\
 		--jscomp_error globalThis\
-		--jscomp_error internetExplorerChecks\
 		--jscomp_error invalidCasts\
 		--jscomp_error misplacedTypeAnnotation\
-		--jscomp_error missingGetCssName\
 		--jscomp_error missingProperties\
 		--jscomp_error missingReturn\
 		--jscomp_error msgDescriptions\
@@ -65,11 +79,19 @@ CLOSURE_FLAGS=\
 		--jscomp_error visibility\
 		--use_types_for_optimization\
 		--summary_detail_level 3\
-		--language_in ECMASCRIPT5_STRICT
+		--language_in ECMASCRIPT_2017\
+		--language_out ECMASCRIPT_2017
 
-TRANSPILE_ES6_FLAGS=\
-		--language_in ECMASCRIPT6_STRICT\
-		--language_out ECMASCRIPT5_STRICT\
+CARGO_FLAGS_SAFE=\
+               --target wasm32-unknown-unknown \
+               -- \
+               -C linker=tools/rust-lld-wrapper \
+               -C link-args="--import-table --global-base=262144 $(STRIP_DEBUG_FLAG)" \
+               -C link-args="build/softfloat.o" \
+               -C link-args="build/zstddeclib.o" \
+               --verbose
+
+CARGO_FLAGS=$(CARGO_FLAGS_SAFE) -C target-feature=+bulk-memory
 
 
 CORE_FILES=const.js config.js io.js main.js lib.js fpu.js ide.js pci.js floppy.js memory.js \
@@ -78,6 +100,12 @@ CORE_FILES=const.js config.js io.js main.js lib.js fpu.js ide.js pci.js floppy.j
 	   cpu.js translate.js modrm.js string.js arith.js misc_instr.js instructions.js debug.js \
 	   elf.js
 LIB_FILES=9p.js filesystem.js jor1k.js marshall.js utf8.js
+
+RUST_FILES=$(shell find src/rust/ -name '*.rs') \
+          src/rust/gen/interpreter.rs src/rust/gen/interpreter0f.rs \
+          src/rust/gen/jit.rs src/rust/gen/jit0f.rs \
+          src/rust/gen/analyzer.rs src/rust/gen/analyzer0f.rs
+
 BROWSER_FILES=screen.js \
 	      keyboard.js mouse.js speaker.js serial.js \
 	      network.js lib.js starter.js worker_bus.js dummy_screen.js
@@ -85,6 +113,7 @@ BROWSER_FILES=screen.js \
 CORE_FILES:=$(addprefix src/,$(CORE_FILES))
 LIB_FILES:=$(addprefix lib/,$(LIB_FILES))
 BROWSER_FILES:=$(addprefix src/browser/,$(BROWSER_FILES))
+
 
 build/v86_all.js: $(CLOSURE) src/*.js src/browser/*.js lib/*.js
 	mkdir -p build
@@ -95,7 +124,6 @@ build/v86_all.js: $(CLOSURE) src/*.js src/browser/*.js lib/*.js
 		$(CLOSURE_SOURCE_MAP)\
 		$(CLOSURE_FLAGS)\
 		--compilation_level ADVANCED\
-		$(TRANSPILE_ES6_FLAGS)\
 		--js $(CORE_FILES)\
 		--js $(LIB_FILES)\
 		--js $(BROWSER_FILES)\
@@ -104,6 +132,19 @@ build/v86_all.js: $(CLOSURE) src/*.js src/browser/*.js lib/*.js
 	echo '//# sourceMappingURL=v86_all.js.map' >> build/v86_all.js
 
 	ls -lh build/v86_all.js
+
+build/v86_all_debug.js: $(CLOSURE) src/*.js src/browser/*.js lib/*.js
+	mkdir -p build
+	java -jar $(CLOSURE) \
+               --js_output_file build/v86_all_debug.js\
+               --define=DEBUG=true\
+               $(CLOSURE_SOURCE_MAP)\
+               $(CLOSURE_FLAGS)\
+               --compilation_level ADVANCED\
+               --js $(CORE_FILES)\
+               --js $(LIB_FILES)\
+               --js $(BROWSER_FILES)\
+               --js src/browser/main.js
 
 
 build/libv86.js: $(CLOSURE) src/*.js lib/*.js src/browser/*.js
@@ -114,7 +155,6 @@ build/libv86.js: $(CLOSURE) src/*.js lib/*.js src/browser/*.js
 		--define=DEBUG=false\
 		$(CLOSURE_FLAGS)\
 		--compilation_level SIMPLE\
-		$(TRANSPILE_ES6_FLAGS)\
 		--output_wrapper ';(function(){%output%}).call(this);'\
 		--js $(CORE_FILES)\
 		--js $(BROWSER_FILES)\
@@ -130,7 +170,7 @@ clean:
 	$(MAKE) -C $(NASM_TEST_DIR) clean
 
 run:
-	python2 -m SimpleHTTPServer 2> /dev/null
+	python3 -m http.server 2> /dev/null
 	#sleep 1
 	#$(BROWSER) http://localhost:8000/index.html &
 
@@ -145,10 +185,10 @@ update_version:
 
 
 $(CLOSURE):
-	wget -P $(CLOSURE_DIR) http://dl.google.com/closure-compiler/compiler-latest.zip
-	unzip -d closure-compiler $(CLOSURE_DIR)/compiler-latest.zip \*.jar
-	mv $(CLOSURE_DIR)/*.jar $(CLOSURE)
-	rm $(CLOSURE_DIR)/compiler-latest.zip
+	mkdir -p $(CLOSURE_DIR)
+	###wget -nv -O $(CLOSURE) https://repo1.maven.org/maven2/com/google/javascript/closure-compiler/v20201207/closure-compiler-v20201207.jar
+	##wget -nv -O $(CLOSURE) https://repo1.maven.org/maven2/com/google/javascript/closure-compiler/v20200406/closure-compiler-v20200406.jar
+	wget -nv -O $(CLOSURE) https://repo1.maven.org/maven2/com/google/javascript/closure-compiler/v20190819/closure-compiler-v20190819.jar
 
 tests: build/libv86.js
 	./tests/full/run.js
