@@ -1,3 +1,0 @@
-loop:
-       hlt
-       jmp     loop
