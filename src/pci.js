@@ -521,7 +521,7 @@ PCI.prototype.set_io_bars = function(bar, from, to)
     {
         var old_entry = ports[from + i];
         ports[from + i] = this.io.create_empty_entry();
-
+        if (!old_entry) { continue; }
         if(old_entry.read8 === this.io.empty_port_read8 &&
            old_entry.read16 === this.io.empty_port_read16 &&
            old_entry.read32 === this.io.empty_port_read32 &&
