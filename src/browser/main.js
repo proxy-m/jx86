@@ -824,7 +824,7 @@
             settings.multiboot = infos.multiboot;
             settings.bzimage = infos.bzimage;
             settings.initrd = infos.initrd;
-            settings.cmdline = infos.cmdline;
+            settings.cmdline = get_query_arguments()["cmdline"] || infos.cmdline;
             settings.bzimage_initrd_from_filesystem = infos.bzimage_initrd_from_filesystem;
             settings.preserve_mac_from_state_image = infos.preserve_mac_from_state_image;
 
@@ -1018,8 +1018,6 @@
             };
         }
 
-        
-
         var emulator = new V86Starter({
             "memory_size": memory_size,
             "vga_memory_size": vga_memory_size,
@@ -1042,7 +1040,7 @@
             "multiboot": settings.multiboot,
             "bzimage": settings.bzimage,
             "initrd": settings.initrd,
-            "cmdline": settings.cmdline,
+            "cmdline": get_query_arguments()["cmdline"] || settings.cmdline,
             "bzimage_initrd_from_filesystem": settings.bzimage_initrd_from_filesystem,
 
             "acpi": enable_acpi,
@@ -1704,9 +1702,10 @@
 
     function set_profile(prof)
     {
+		var cmdline = get_query_arguments()["cmdline"];
         if(window.history.pushState)
         {
-            window.history.pushState({ profile: prof }, "", "?profile=" + prof);
+            window.history.pushState({ profile: prof}, "", "?profile=" + prof + ((cmdline) ? ("&cmdline=" + encodeURIComponent(cmdline)) : ""));
         }
 
     }
