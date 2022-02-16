@@ -470,8 +470,8 @@
                 memory_size: 128 * 1024 * 1024,
                 hda: {
                     "url": HOST + "windows98.img",
-                    "async": true,
-                    use_parts: !ON_LOCALHOST,
+                    "async": false,
+                    use_parts: false,
                     "size": 300 * 1024 * 1024,
                 },
                 name: "Windows 98",
@@ -496,8 +496,8 @@
                 hda: {
                     "url": HOST + "w95.img",
                     "size": 242049024,
-                    "async": true,
-                    use_parts: !ON_LOCALHOST,
+                    "async": false,
+                    use_parts: false,
                 },
                 name: "Windows 95",
             },
