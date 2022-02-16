@@ -196,7 +196,7 @@ function V86Starter(options)
 
                     const emulator = this.v86 = new v86(this.emulator_bus, { exports, wasm_table });
                     cpu = emulator.cpu;
-
+                    console.error("v86_bin", v86_bin);
                     this.continue_init(emulator, options);
                 }, err => {
                     v86util.load_file(v86_bin_fallback, {
@@ -211,6 +211,7 @@ function V86Starter(options)
 
                                     const emulator = this.v86 = new v86(this.emulator_bus, { exports, wasm_table });
                                     cpu = emulator.cpu;
+                                    console.error("v86_bin_fallback", v86_bin_fallback);
 
                                     this.continue_init(emulator, options);
                                 });
